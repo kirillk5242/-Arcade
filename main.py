@@ -1,36 +1,26 @@
-import pygame
+import arcade
 from random import randrange as rnd
 import sqlite3
 import datetime
 
-s = w, h = 720, 550
-fps = 60
+SCREEN_WIDTH = 770
+SCREEN_HEIGHT = 600
+SCREEN_TITLE = "Арканоид"
+FPS = 60
 
-pw = 200
-ph = 10
-pspeed = 15
-ballr = 20
-initial_ballspeed = 6
-ballspeed = initial_ballspeed
-blocks_per_level = 24
+PADDLE_WIDTH = 200
+PADDLE_HEIGHT = 10
+PADDLE_SPEED = 15
 
-p = pygame.Rect(w // 2 - pw // 2, h - ph - 10, pw, ph)
-ball1 = int(ballr * 2 ** 0.5)
-ball = pygame.Rect(rnd(ball1, w - ball1), h // 2, ball1, ball1)
-dx, dy = 1, -1
+BALL_RADIUS = 20
+INITIAL_BALL_SPEED = 6
 
-score = 0
-level = 1
+BLOCK_COLS = 6
+BLOCK_ROWS = 4
 
-pygame.init()
-screen = pygame.display.set_mode(s)
-pygame.display.set_caption("Арканоид")
-clock = pygame.time.Clock()
-img = pygame.image.load('data/ФОН1.jpg').convert()
-
-conn = sqlite3.connect('arkanoid_scores.db')
+conn = sqlite3.connect("arkanoid_scores.db")
 cursor = conn.cursor()
-cursor.execute('''
+cursor.execute("""
 CREATE TABLE IF NOT EXISTS scores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT,
@@ -38,158 +28,145 @@ CREATE TABLE IF NOT EXISTS scores (
     level INTEGER,
     date TEXT
 )
-''')
+""")
 conn.commit()
 
 
 def save_score(name, score, level):
     date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute('INSERT INTO scores (name, score, level, date) VALUES (?, ?, ?, ?)',
-                   (name, score, level, date))
+    cursor.execute(
+        "INSERT INTO scores (name, score, level, date) VALUES (?, ?, ?, ?)",
+        (name, score, level, date)
+    )
     conn.commit()
 
 
 def show_top_scores():
-    cursor.execute('SELECT name, score, level, date FROM scores ORDER BY score DESC LIMIT 10')
-    top_scores = cursor.fetchall()
-    print("\n===== топ 10 рекордов =====")
-    for rank, (name, score, level, date) in enumerate(top_scores, start=1):
-        print(f"{rank}. {name} - {score} очков, уровень {level}, дата: {date}")
-    print("============================\n")
+    cursor.execute(
+        "SELECT name, score, level, date FROM scores ORDER BY score DESC LIMIT 10"
+    )
+    print("\n===== ТОП 10 =====")
+    for i, row in enumerate(cursor.fetchall(), start=1):
+        print(f"{i}. {row[0]} — {row[1]} очков, уровень {row[2]}, {row[3]}")
+    print("==================\n")
 
 
-def create_blocks():
-    return [pygame.Rect(10 + 120 * i, 10 + 60 * j, 100, 50) for i in range(6) for j in range(4)], \
-           [(rnd(30, 256), rnd(30, 256), rnd(20, 256)) for i in range(6) for j in range(4)]
+class Paddle(arcade.SpriteSolidColor):
+    def __init__(self):
+        super().__init__(PADDLE_WIDTH, PADDLE_HEIGHT, arcade.color.DARK_GREEN)
+        self.center_x = SCREEN_WIDTH // 2
+        self.center_y = 30
+        self.change_x = 0
 
 
-blocklist, colorlist = create_blocks()
+class Ball(arcade.SpriteCircle):
+    def __init__(self):
+        super().__init__(BALL_RADIUS, arcade.color.PURPLE)
+        self.center_x = rnd(BALL_RADIUS, SCREEN_WIDTH - BALL_RADIUS)
+        self.center_y = SCREEN_HEIGHT // 2
+        self.change_x = 1
+        self.change_y = -1
 
 
-def show_intro():
-    font = pygame.font.SysFont(None, 75)
-    start_text = font.render('чтобы играть', True, (255, 255, 255))
-    title_text = font.render('Нажмите на пробел', True, (255, 255, 255))
-
-    screen.fill((160, 32, 255))
-    screen.blit(title_text, (w // 2 - title_text.get_width() // 2, h // 2 - title_text.get_height() // 2 - 30))
-    screen.blit(start_text, (w // 2 - start_text.get_width() // 2, h // 2 + 20))
-    pygame.display.flip()
-
-    waiting = True
-    while waiting:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                exit()
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_SPACE:
-                    waiting = False
+class Block(arcade.SpriteSolidColor):
+    def __init__(self, x, y, color):
+        super().__init__(100, 50, color)
+        self.center_x = x
+        self.center_y = y
 
 
-def show_game_over():
-    font = pygame.font.SysFont(None, 75)
-    text = font.render('GAME OVER ;(', True, (255, 96, 208))
-    screen.fill((64, 64, 64))
-    screen.blit(text, (w // 2 - text.get_width() // 2, h // 2 - text.get_height() // 2))
-    pygame.display.flip()
-    pygame.time.delay(1000)
+class Arkanoid(arcade.Window):
+    def __init__(self):
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+        arcade.set_background_color(arcade.color.BLACK)
+        self.player_list = arcade.SpriteList()
+        self.ball_list = arcade.SpriteList()
+        self.block_list = arcade.SpriteList()
+        self.paddle = Paddle()
+        self.ball = Ball()
+        self.player_list.append(self.paddle)
+        self.ball_list.append(self.ball)
+        self.score = 0
+        self.level = 1
+        self.ball_speed = INITIAL_BALL_SPEED
+        self.create_blocks()
+
+    def create_blocks(self):
+        self.block_list.clear()
+        for i in range(BLOCK_COLS):
+            for j in range(BLOCK_ROWS):
+                x = 60 + i * 120
+                y = SCREEN_HEIGHT - 60 - j * 60
+                color = (rnd(30, 255), rnd(30, 255), rnd(30, 255))
+                self.block_list.append(Block(x, y, color))
+
+    def on_draw(self):
+        self.clear()
+        self.block_list.draw()
+        self.player_list.draw()
+        self.ball_list.draw()
+        arcade.draw_text(
+            f"Очки: {self.score}",
+            10, 10,
+            arcade.color.INDIGO,
+            20
+        )
+        arcade.draw_text(
+            f"Уровень: {self.level}",
+            SCREEN_WIDTH - 150, 10,
+            arcade.color.INDIGO,
+            20
+        )
+
+    def on_update(self, delta_time):
+        self.paddle.center_x += self.paddle.change_x
+        if self.paddle.left < 0:
+            self.paddle.left = 0
+        if self.paddle.right > SCREEN_WIDTH:
+            self.paddle.right = SCREEN_WIDTH
+
+        self.ball.center_x += self.ball_speed * self.ball.change_x
+        self.ball.center_y += self.ball_speed * self.ball.change_y
+
+        if self.ball.left <= 0 or self.ball.right >= SCREEN_WIDTH:
+            self.ball.change_x *= -1
+        if self.ball.top >= SCREEN_HEIGHT:
+            self.ball.change_y *= -1
+
+        if arcade.check_for_collision(self.ball, self.paddle) and self.ball.change_y < 0:
+            self.ball.change_y *= -1
+
+        hit_list = arcade.check_for_collision_with_list(self.ball, self.block_list)
+        if hit_list:
+            for block in hit_list:
+                block.remove_from_sprite_lists()
+                self.score += 1
+            self.ball.change_y *= -1
+
+        if self.ball.bottom < 0:
+            arcade.close_window()
+            name = input("Введите ваше имя: ")
+            save_score(name, self.score, self.level)
+            show_top_scores()
+
+        if len(self.block_list) == 0:
+            self.level += 1
+            self.ball_speed = INITIALIAL_BALL_SPEED = INITIAL_BALL_SPEED + self.level
+            self.ball.center_x = rnd(BALL_RADIUS, SCREEN_WIDTH - BALL_RADIUS)
+            self.ball.center_y = SCREEN_HEIGHT // 2
+            self.create_blocks()
+
+    def on_key_press(self, key, modifiers):
+        if key == arcade.key.LEFT:
+            self.paddle.change_x = -PADDLE_SPEED
+        elif key == arcade.key.RIGHT:
+            self.paddle.change_x = PADDLE_SPEED
+
+    def on_key_release(self, key, modifiers):
+        if key in (arcade.key.LEFT, arcade.key.RIGHT):
+            self.paddle.change_x = 0
 
 
-def show_victory():
-    font = pygame.font.SysFont(None, 75)
-    text = font.render('YOU WIN ;)', True, (160, 32, 255))
-    screen.fill((80, 208, 255))
-    screen.blit(text, (w // 2 - text.get_width() // 2, h // 2 - text.get_height() // 2))
-    pygame.display.flip()
-    pygame.time.delay(1000)
-
-
-def hit(dx, dy, ball, rect):
-    if dx > 0:
-        delta_x = ball.right - rect.left
-    else:
-        delta_x = rect.right - ball.left
-    if dy > 0:
-        delta_y = ball.bottom - rect.top
-    else:
-        delta_y = rect.bottom - ball.top
-
-    if abs(delta_x - delta_y) < 10:
-        dx, dy = -dx, -dy
-    elif delta_x > delta_y:
-        dy = -dy
-    elif delta_y > delta_x:
-        dx = -dx
-    return dx, dy
-
-
-def draw_score_level():
-    font = pygame.font.SysFont(None, 36)
-    score_text = font.render(f'Очки: {score}', True, pygame.Color('indigo'))
-    level_text = font.render(f'Уровень: {level}', True, pygame.Color('indigo'))
-    screen.blit(score_text, (10, 10))
-    screen.blit(level_text, (w - level_text.get_width() - 10, 10))
-
-
-def reset_game():
-    global level, blocklist, colorlist, ball, ballspeed
-    level += 1
-    ballspeed = initial_ballspeed + level
-    ball.x = rnd(ball1, w - ball1)
-    ball.y = h // 2
-    blocklist, colorlist = create_blocks()
-
-
-show_intro()
-
-
-
-while True:
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            exit()
-
-    screen.blit(img, (0, 0))
-    [pygame.draw.rect(screen, colorlist[color], block) for color, block in enumerate(blocklist)]
-    pygame.draw.rect(screen, pygame.Color('darkgreen'), p)
-    pygame.draw.circle(screen, pygame.Color('purple4'), ball.center, ballr)
-
-    ball.x += ballspeed * dx
-    ball.y += ballspeed * dy
-
-    if ball.centerx < ballr or ball.centerx > w - ballr:
-        dx = -dx
-    if ball.centery < ballr:
-        dy = -dy
-
-    if ball.colliderect(p) and dy > 0:
-        dx, dy = hit(dx, dy, ball, p)
-
-    hit_index = ball.collidelist(blocklist)
-    if hit_index != -1:
-        hit_rect = blocklist.pop(hit_index)
-        hit_color = colorlist.pop(hit_index)
-        dx, dy = hit(dx, dy, ball, hit_rect)
-        score += 1
-
-    if ball.bottom > h:
-        show_game_over()
-        name = input("Введите ваше имя: ")
-        save_score(name, score, level)
-        show_top_scores()
-        exit()
-
-    if not len(blocklist):
-        show_victory()
-        reset_game()
-
-    draw_score_level()
-
-    key = pygame.key.get_pressed()
-    if key[pygame.K_LEFT] and p.left > 0:
-        p.left -= pspeed
-    if key[pygame.K_RIGHT] and p.right < w:
-        p.right += pspeed
-
-    pygame.display.flip()
-    clock.tick(fps)
+if __name__ == "__main__":
+    game = Arkanoid()
+    arcade.run()
